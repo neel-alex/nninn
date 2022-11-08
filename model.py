@@ -1,69 +1,60 @@
-from typing import Tuple
+from functools import partial
 
 import jax
-from jax import grad, jit, vmap, random
-from jax.nn import relu
-from jax.nn.initializers import normal
+from jax import grad, jit
 import jax.numpy as jnp
 import optax
-from optax import adam, softmax_cross_entropy
+from optax import softmax_cross_entropy
+import haiku as hk
 
 
-def init_fc_layer(input_shape, output_shape, key, scale=1e-2):
-    w_key, b_key = random.split(key)
-    return (scale * random.normal(w_key, (output_shape, input_shape)),
-            scale * random.normal(b_key, (output_shape,)))
+def net_fn(x: jnp.ndarray, hidden, n_classes) -> jnp.ndarray:
+    mlp = hk.Sequential([
+        hk.Linear(hidden), jax.nn.relu,
+        hk.Linear(n_classes)
+    ])
+    return mlp(x)
 
 
-def make_mlp(input_shape, output_shape, hidden_layers, key, scale=1e-2):
-    layers = (input_shape,) + hidden_layers + (output_shape,)
-    keys = random.split(key, len(layers) - 1)
-    return [init_fc_layer(i, o, k, scale=scale)
-            for i, o, k in zip(layers[:-1], layers[1:], keys)]
-
-
-def forward(x, mlp_layers):
-    for w, b in mlp_layers[:-1]:
-        x = jnp.dot(w, x.T) + b
-        x = relu(x)
-    x = jnp.dot(mlp_layers[-1][0], x.T) + mlp_layers[-1][1]
-    return x
-
-
-def compute_loss(x, mlp_layers, labels):
-    logits = vmap(forward, in_axes=(0, None))(x, mlp_layers)
+def loss(params, batch, labels, network):
+    logits = network.apply(params, batch)
     loss = softmax_cross_entropy(logits, labels)
-    total_loss = jnp.sum(loss)
-    return total_loss
+    return jnp.mean(loss)
 
 
-def train_init(input_shape,
-               num_classes,
-               key,
-               learning_rate: float = 1e-3,
-               hidden_layers: Tuple[int, ...] = (16,),
-               init_scale: float = 1e-2,
-               ):
-    mlp = make_mlp(input_shape, num_classes, hidden_layers, key, scale=init_scale)
-    optimizer = adam(learning_rate)
-    opt_state = optimizer.init(mlp)
-    return mlp, optimizer, opt_state
+@partial(jit, static_argnums=3)
+def evaluate(params, batch, labels, network):
+    logits = network.apply(params, batch)
+    predictions = jnp.argmax(logits, axis=-1)
+    targets = jnp.argmax(labels, axis=-1)
+    return jnp.mean(predictions == targets)
 
 
-def train(batch,
-          weights,
-          target,
-          optimizer,
-          opt_state):
-    grads = grad(compute_loss, argnums=1)(batch, weights, target)
-    updates, opt_state = optimizer.update(grads, opt_state)
-    weights = optax.apply_updates(weights, updates)
+@partial(jit, static_argnums=(4, 5))
+def update(params, opt_state, batch, labels, network, optimiser):
+    grads = grad(loss)(params, batch, labels, network)
+    updates, opt_state = optimiser.update(grads, opt_state)
+    params = optax.apply_updates(params, updates)
+    return params, opt_state
 
 
-if __name__ == "__main__":
-    key = random.PRNGKey(0)
-    import mnist
-    train_data, train_labels, _, _ = mnist.mnist()
-    train_data, train_labels = train_data[:32], train_labels[:32]
-    mlp, optimizer, opt_state = train_init(784, 10, key)
-    train(train_data, mlp, train_labels, optimizer, opt_state)
+def train_net(key, network, optimiser, train_data, train_labels,
+              test_data, test_labels, steps=3001, verbose=1):
+    params = network.init(key, train_data[0])
+    opt_state = optimiser.init(params)
+
+    for step in range(steps):
+        if step % 100 == 0:
+            if verbose == 1:
+                accuracy = jnp.array(evaluate(params, test_data, test_labels, network)).item()
+                print({"step": step, "accuracy": f"{accuracy:.3f}"})
+            if verbose == 2:
+                train_accuracy = jnp.array(evaluate(params, train_data, train_labels, network)).item()
+                test_accuracy = jnp.array(evaluate(params, test_data, test_labels, network)).item()
+                print({"step": step,
+                       "train_accuracy": f"{train_accuracy:.3f}",
+                       "test_accuracy": f"{test_accuracy:.3f}"})
+
+        params, opt_state = update(params, opt_state, train_data, train_labels, network, optimiser)
+
+    return params

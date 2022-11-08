@@ -24,6 +24,7 @@ from os import path
 import struct
 import urllib.request
 
+from jax import jit, random
 import jax.numpy as np
 from jax.random import permutation
 
@@ -95,3 +96,14 @@ def mnist(permute_key=None):
         train_labels = train_labels[perm]
 
     return train_images, train_labels, test_images, test_labels
+
+
+def dataloader(key, batch_size, data, labels):
+    data_len = data.shape[0]
+    while True:
+        i = 0
+        key, subkey = random.split(key)
+        order = permutation(subkey, data_len)
+        while i < data_len:
+            yield data[order[i:i+batch_size]], labels[order[i:i+batch_size]]
+            i += batch_size
