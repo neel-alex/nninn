@@ -41,10 +41,12 @@ network = hk.without_apply_rng(hk.transform(lambda x: net_fn(x, NUM_HIDDEN, NUM_
 
 optimiser = adam(LEARNING_RATE)
 key, subkey = random.split(key)
-networks = gather_network_dataset(subkey, network, optimiser, train_data, train_labels, test_data, test_labels)
+networks = gather_network_dataset(subkey, network, optimiser, train_data, train_labels,
+                                  test_data, test_labels, n_nets=N_PARALLEL)
 optimiser = sgd(LEARNING_RATE)
 key, subkey = random.split(key)
-networks += gather_network_dataset(subkey, network, optimiser, train_data, train_labels, test_data, test_labels)
+networks += gather_network_dataset(subkey, network, optimiser, train_data, train_labels,
+                                   test_data, test_labels, n_nets=N_PARALLEL)
 
 data_nets = jnp.row_stack(networks)
 data_labels = jnp.array([0 for _ in range(NUM_DATAPOINTS//2)] +
