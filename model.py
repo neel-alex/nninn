@@ -1,7 +1,7 @@
 from functools import partial
 
 import jax
-from jax import grad, jit
+from jax import grad, jit, vmap, random
 import jax.numpy as jnp
 import optax
 from optax import softmax_cross_entropy
@@ -58,3 +58,25 @@ def train_net(key, network, optimiser, train_data, train_labels,
         params, opt_state = update(params, opt_state, train_data, train_labels, network, optimiser)
 
     return params
+
+
+vupdate = vmap(update, in_axes=(0, 0, None, None, None, None))
+vevaluate = vmap(evaluate, in_axes=(0, None, None, None))
+
+
+def train_nets(key, network, optimiser, train_data, train_labels,
+               test_data, test_labels, n_nets=100, steps=3001, verbose=1):
+    key_array = random.split(key, n_nets)
+    net_params = vmap(network.init, in_axes=(0, None))(key_array, train_data[0])
+    opt_states = vmap(optimiser.init)(net_params)
+
+    for step in range(steps):
+        if step % 100 == 0:
+            if verbose == 1:
+                accuracies = jnp.array(vevaluate(net_params, test_data, test_labels, network))
+                mean, var = accuracies.mean().item(), accuracies.var().item()
+                print({"step": step, "accuracy": f"{mean:.3f} +/- {var**0.5:.3f}"})
+
+        net_params, opt_states = vupdate(net_params, opt_states, train_data, train_labels, network, optimiser)
+
+    return net_params
