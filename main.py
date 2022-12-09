@@ -17,7 +17,7 @@ def config():
     n_classes = 2
     n_hidden = 256
     learning_rate = 1e-3
-    n_data = 2000
+    n_data = 200
     train_frac = 0.8
     normalize = False
     seed = 4  # Chosen by fair dice roll. Guaranteed to be random.

@@ -3,4 +3,4 @@ jax[cuda]
 optax
 dm-haiku
 matplotlib
-sacred
+https://github.com/IDSIA/sacred/archive/refs/tags/0.8.3.tar.gz   # Required for Python 3.10 compatibility, if lower python version then any sacred works.
