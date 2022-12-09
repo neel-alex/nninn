@@ -3,3 +3,4 @@ jax[cuda]
 optax
 dm-haiku
 matplotlib
+sacred
