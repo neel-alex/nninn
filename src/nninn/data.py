@@ -4,11 +4,11 @@ from optax import adam, sgd
 import haiku as hk
 from sacred import Experiment, observers
 
-from mnist import mnist
-from model import net_fn, train_nets
+from nninn.mnist import mnist
+from nninn.model import net_fn, train_nets
 
 train_nets_experiment = Experiment('train_nets')
-observer = observers.FileStorageObserver('results/train_nets')
+observer = observers.FileStorageObserver('../../results/train_nets')
 train_nets_experiment.observers.append(observer)
 
 
