@@ -28,7 +28,7 @@ def ctc_net_fn(x: jnp.ndarray,
                n_fc_layers: int = 3,
                fc_width: int = 128,
                activation: Callable = nn.relu,
-               w_init: Initializer = TruncatedNormal()) -> jnp.ndarray:
+               w_init: Initializer = TruncatedNormal()) -> jnp.ndarray:  # TODO: Batchnorm?
     convs = [hk.Conv2D(output_channels=n_filters, kernel_shape=kernel_size, padding="SAME", w_init=w_init)
              for _ in range(n_conv_layers)]
     fcs = [hk.Linear(fc_width, w_init=w_init) for _ in range(n_fc_layers - 1)]
@@ -49,7 +49,7 @@ def ctc_net_fn(x: jnp.ndarray,
 
 key = random.PRNGKey(4)
 
-learning_rates = lambda k: random.uniform(k, minval=0.0002, maxval=0.005)  # decay by 0.95 every epoch
+learning_rates = lambda k: random.uniform(k, minval=0.0002, maxval=0.005)  # TODO: decay by 0.95 every epoch
 hyperparameters = {
     "dataset": ["MNIST"],
     "batch_size": [32, 64, 128, 256],
@@ -60,7 +60,7 @@ hyperparameters = {
 }
 
 datasets = {
-    "MNIST": mnist()
+    "MNIST": mnist()  # TODO: CIFAR-10, SVHN, STL-10, Fashion-MNIST
 }
 
 optimizers = {
@@ -98,11 +98,12 @@ if __name__ == "__main__":
         with open("data/ctc_fixed/hyperparameters.json", 'w') as f:
             f.write('{}')
 
-    num_epochs = 20
+    num_epochs = 20  # TODO: Implement early stopping?
 
     for i in range(3000):
         if str(i) in os.listdir("data/ctc_fixed"):
-            continue
+            key, _ = random.split(key)  # TODO: Fix to keep constant RNG (maybe store/load key/subkey?)
+            continue  # Deaths (mid): 414, 436, 500
         keys = random.split(key, num=8)
         key = keys[-1]
         hparams = {'lr': learning_rates(keys[0]).item()}
@@ -120,7 +121,7 @@ if __name__ == "__main__":
         test_data = test_data.reshape(len(test_data), 1, 28, 28)
         batch_size = hparams['batch_size']
 
-        params = network.init(key, train_data[0])
+        params = network.init(key, train_data[0])  # TODO: Random key split
         opt_state = optimizer.init(params)
 
         print(i)
@@ -136,8 +137,8 @@ if __name__ == "__main__":
                 batch_data = data[batch*batch_size:(batch+1)*batch_size]
                 if hparams['augmentation']:
                     key, sd_key, noise_key = random.split(key, num=3)
-                    noise_sd = random.uniform(key, shape=(1,), minval=0.0, maxval=0.03).item()  # TODO: Other augmentations
-                    batch_data = batch_data + noise_sd * random.normal(key, shape=batch_data.shape)  # I think this is the right way to use SD?
+                    noise_sd = random.uniform(sd_key, shape=(1,), minval=0.0, maxval=0.03).item()  # TODO: Other augmentations
+                    batch_data = batch_data + noise_sd * random.normal(noise_key, shape=batch_data.shape)  # I think this is the right way to use SD?
                 batch_labels = labels[batch*batch_size:(batch+1)*batch_size]
                 params, opt_state = update(params, opt_state, batch_data, batch_labels, network, optimizer)
                 # get average train loss
