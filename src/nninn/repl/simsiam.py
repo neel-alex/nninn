@@ -1,6 +1,7 @@
 import os
 import math
 from functools import partial
+import json
 
 from jax import jit, grad, vmap, random, nn
 import jax.lax
@@ -17,6 +18,39 @@ import matplotlib.pyplot as plt
 key = random.PRNGKey(4)
 num_epochs = 50
 batch_size = 483  # TODO: Use vmap to increase viable batch size
+
+unmap_info = {
+    "dataset": {
+        "MNIST": 0,
+    },
+    "batch_size": {
+        32: 0,
+        64: 1,
+        128: 2,
+        256: 3,
+    },
+    "augmentation": {
+        True: 0,
+        False: 1,
+    },
+    "optimizer": {
+        "Adam": 0,
+        "RMSProp": 1,
+        "MomentumSGD": 2,
+    },
+    "activation": {
+        "ReLU": 0,
+        "ELU": 1,
+        "Sigmoid": 2,
+        "Tanh": 3,
+    },
+    "initialization": {
+        "Constant": 0,
+        "RandomNormal": 1,
+        "GlorotUniform": 2,
+        "GlorotNormal": 3,
+    },
+}
 
 
 class SimpleMLP(hk.Module):
@@ -76,6 +110,45 @@ def data_transform(net):
     return jnp.concatenate(flattened_params)
 
 
+def load_nets(n=3000):
+    nets = []
+    with open('data/ctc_fixed/hyperparameters.json') as f:
+        net_data = json.load(f)
+    labels = {label: [] for label in net_data['0']}
+    for i, dir_info in enumerate(os.walk("data/ctc_fixed")):
+        if i == 0:
+            continue
+        dir_name, _, files = dir_info
+        for file_name in files:
+            if file_name != "epoch_20.npy":
+                continue  # TODO: use other net snapshots?
+            with open(dir_name + "/" + file_name, 'rb') as f:
+                net = jnp.load(f, allow_pickle=True).item()
+                if has_nans(net):
+                    print("Not loading params at:", dir_name, "since it contains nan values")
+                    continue
+                nets.append(net)
+                net_num = dir_name.split('/')[-1]
+                for hparam in net_data[net_num]:
+                    labels[hparam].append(net_data[net_num][hparam])
+        if len(nets) == n:
+            break
+    print("Loaded", len(nets), "network parameters")
+    data_nets = [data_transform(net) for net in nets]
+    data = jnp.array(data_nets)
+
+    processed_labels = {}
+
+    for hparam in labels:
+        if hparam == "lr":
+            processed_labels['lr'] = jnp.array(labels['lr'])
+            continue
+        unmap = unmap_info[hparam]
+        processed_labels[hparam] = jnp.array([unmap[x] for x in labels[hparam]], dtype=jnp.int32)
+
+    return data, processed_labels
+
+
 def random_data_view(keys, nets, chunk_size=4096):
     sliced_nets = []
     for key, net in zip(keys, nets):
@@ -116,25 +189,7 @@ def update(proj_param, pred_param, opt_state,
 
 
 if __name__ == "__main__":
-    nets = []
-    for i, dir_info in enumerate(os.walk("data/ctc_fixed")):
-        if i == 0:
-            continue
-        dir_name, _, files = dir_info
-        for file_name in files:
-            if file_name != "epoch_20.npy":
-                continue  # TODO: use other net snapshots?
-            with open(dir_name + "/" + file_name, 'rb') as f:
-                net = jnp.load(f, allow_pickle=True).item()
-                if has_nans(net):
-                    print(i)
-                    print("Not loading net at:", dir_name)
-                    print("Contains nan values.")
-                    continue
-                nets.append(net)
-    print(len(nets))
-    data_nets = [data_transform(net) for net in nets]
-    data = jnp.array(data_nets)
+    data, _ = load_nets()
 
     proj_net = hk.without_apply_rng(hk.transform_with_state(projection_net_fn))
     pred_net = hk.without_apply_rng(hk.transform_with_state(prediction_net_fn))
@@ -175,11 +230,15 @@ if __name__ == "__main__":
         epoch_loss = sum(losses) / len(losses)
         print("Epoch", epoch, "training loss", epoch_loss)
         epoch_losses.append(epoch_loss)
+
+    with open("models/simsiam.npz", 'wb') as f:
+        jnp.savez(f, **{
+            "proj_param": proj_param,
+            "proj_state": proj_state,
+            "pred_param": pred_param,
+            "pred_state": pred_state,
+        })
+
     plt.plot(range(num_epochs), epoch_losses)
     plt.show()
-
-
-
-
-
 
