@@ -83,15 +83,6 @@ initializers = {
     "GlorotNormal": VarianceScaling(1.0, "fan_avg", "truncated_normal"),
 }
 
-"""datasets = [mnist()]
-batch_sizes = [32, 64, 128, 256]
-augmentations = [True, False]
-optimizers = [adam, rmsprop, sgd]  # sgd is used with momentum!
-
-activations = [nn.relu, nn.elu, nn.sigmoid, nn.tanh]
-initializers = [initializers.Constant, initializers.RandomNormal,
-                initializers.VarianceScaling, initializers.VarianceScaling] # Glorot uniform/normal
-"""
 
 if __name__ == "__main__":
     if not Path("data/ctc_fixed/hyperparameters.json").exists():
@@ -121,7 +112,8 @@ if __name__ == "__main__":
         test_data = test_data.reshape(len(test_data), 1, 28, 28)
         batch_size = hparams['batch_size']
 
-        params = network.init(key, train_data[0])  # TODO: Random key split
+        key, subkey = random.split(key)
+        params = network.init(subkey, train_data[0])  # TODO: Random key split
         opt_state = optimizer.init(params)
 
         print(i)

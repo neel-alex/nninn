@@ -6,12 +6,11 @@ import haiku as hk
 import optax
 from optax import adam, softmax_cross_entropy
 
-from nninn.repl.simsiam import load_nets, projection_net_fn, prediction_net_fn
-from nninn.repl.simsiam_classification import classes_per_task, full_random_data_view
+from nninn.repl.utils import load_nets, classes_per_task, random_data_view, shuffle_and_split_data
 
 key = random.PRNGKey(4)
 lr = 1e-3
-task = "augmentation"
+task = "initialization"
 num_epochs = 200
 
 
@@ -97,8 +96,10 @@ def update(params, state, opt_state, key, batch, labels, network, optimiser):
 
 if __name__ == "__main__":
     data, all_labels = load_nets()
+    key, subkey = random.split(key)
+    train_data, train_labels, test_data, test_labels = shuffle_and_split_data(subkey, data, all_labels, task)
 
-    dmc_net = hk.transform_with_state(dmc_net_fn)
+    dmc_net = hk.transform_with_state(lambda x, key, is_training: dmc_net_fn(x, key, is_training, num_classes=classes_per_task[task]))
     params, state = dmc_net.init(key, x=data[:1, :4096], key=key, is_training=True)
     """
     # TEST CTC
@@ -108,23 +109,9 @@ if __name__ == "__main__":
     optimizer = adam(lr)
     opt_state = optimizer.init(params)
 
-    labels = all_labels[task]
-    labels = nn.one_hot(labels, classes_per_task[task])
-
-    key, subkey = random.split(key)
-    shuffled_data = random.permutation(subkey, data)
-    shuffled_labels = random.permutation(subkey, labels)
-
-    split_index = int(len(data) * 0.8)
-    train_data = data[:split_index]
-    train_labels = labels[:split_index]
-
-    test_data = data[split_index:]
-    test_labels = labels[split_index:]
-
     for epoch in range(num_epochs):
         key, subkey = random.split(key)
-        sliced_data = full_random_data_view(subkey, train_data)
+        sliced_data = random_data_view(subkey, train_data)
         key, subkey = random.split(key)
         batch_data = random.permutation(subkey, sliced_data)
         batch_labels = random.permutation(subkey, train_labels)
@@ -134,7 +121,7 @@ if __name__ == "__main__":
         print("Epoch", epoch, "train loss:", train_loss)
 
         key, subkey = random.split(key)
-        sliced_test_data = full_random_data_view(subkey, test_data)
+        sliced_test_data = random_data_view(subkey, test_data)
         key, subkey = random.split(key)
         print("Test accuracy:", evaluate(params, state, subkey, sliced_test_data, test_labels, dmc_net))
 

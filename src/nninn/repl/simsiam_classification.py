@@ -8,28 +8,13 @@ from optax import softmax_cross_entropy
 
 
 from nninn.repl.simsiam import load_nets, projection_net_fn, prediction_net_fn
+from nninn.repl.utils import classes_per_task, random_data_view, shuffle_and_split_data
 
 
 key = random.PRNGKey(4)
-task = "augmentation"
-classes_per_task = {
-    "batch_size": 4,
-    "augmentation": 2,
-    "optimizer": 3,
-    "activation": 4,
-    "initialization": 4,
-}
+task = "initialization"
 lr = 1e-3
-num_epochs = 50
-
-
-def full_random_data_view(key, data, chunk_size=4096):
-    sliced_nets = []
-    for net in data:
-        key, subkey = random.split(key)
-        index = random.randint(subkey, shape=(1,), minval=0, maxval=net.size-chunk_size+1).item()
-        sliced_nets.append(net[index:index+chunk_size])
-    return jnp.array(sliced_nets)
+num_epochs = 200
 
 
 def classification_head_fn(x, num_classes, fc_width=2048):
@@ -64,10 +49,12 @@ def update(params, opt_state, batch, labels, proj_net, proj_param, proj_state, n
     params = optax.apply_updates(params, updates)
     return params, opt_state, train_loss
 
+
 if __name__ == "__main__":
     # Load data
-    data, all_labels = load_nets(n=80)
-
+    data, all_labels = load_nets()
+    key, subkey = random.split(key)
+    train_data, train_labels, test_data, test_labels = shuffle_and_split_data(subkey, data, all_labels, task)
 
     # Load simsiam
     proj_net = hk.without_apply_rng(hk.transform_with_state(projection_net_fn))
@@ -84,7 +71,6 @@ if __name__ == "__main__":
     projected, _ = proj_net.apply(proj_param, proj_state, dummy, is_training=False)
     predicted, _ = pred_net.apply(pred_param, pred_state, projected, is_training=False)
 
-
     classification_head = hk.without_apply_rng(hk.transform(lambda x: classification_head_fn(x, num_classes=classes_per_task[task])))
 
     key, subkey = random.split(key)
@@ -93,23 +79,10 @@ if __name__ == "__main__":
     optimizer = adam(lr)
     opt_state = optimizer.init(params)
 
-    labels = all_labels[task]
-    labels = nn.one_hot(labels, classes_per_task[task])
-
-    key, subkey = random.split(key)
-    shuffled_data = random.permutation(subkey, data)
-    shuffled_labels = random.permutation(subkey, labels)
-
-    split_index = int(len(data)*0.8)
-    train_data = data[:split_index]
-    train_labels = labels[:split_index]
-
-    test_data = data[split_index:]
-    test_labels = labels[split_index:]
-
     for epoch in range(num_epochs):
         key, subkey = random.split(key)
-        sliced_data = full_random_data_view(subkey, train_data)
+        sliced_data = random_data_view(subkey, train_data)
+
         key, subkey = random.split(key)
         batch_data = random.permutation(subkey, sliced_data)
         batch_labels = random.permutation(subkey, train_labels)
@@ -119,8 +92,7 @@ if __name__ == "__main__":
         print("Epoch", epoch, "train loss:", train_loss)
 
         key, subkey = random.split(key)
-        sliced_test_data = full_random_data_view(subkey, test_data)
+        sliced_test_data = random_data_view(subkey, test_data)
 
         print("Test accuracy:",
               evaluate(params, sliced_test_data, test_labels, proj_net, proj_param, proj_state, classification_head))
-
