@@ -16,6 +16,8 @@ from haiku.initializers import Initializer, Constant, RandomNormal, TruncatedNor
 import datasets
 
 
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.3'
+
 # Whether datasets should be lazily loaded or if they should be loaded all at once when the script executes
 lazy = False
 
