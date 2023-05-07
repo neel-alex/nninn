@@ -5,6 +5,7 @@ from typing import Dict, Tuple
 
 from jax import random, nn
 import jax.numpy as jnp
+import numpy as np
 
 
 key = random.PRNGKey(4)
@@ -66,6 +67,7 @@ def has_nans(net: JAXParams) -> bool:
 def data_transform(net: JAXParams) -> jnp.ndarray:
     """ Takes all parameters in the parameters of a jax neural network and flattens it into a 1d vector.
     """
+    # TODO use jax.flatten_utils instead?
     flattened_params = []
     for layer in net:
         for param in net[layer]:
@@ -74,12 +76,13 @@ def data_transform(net: JAXParams) -> jnp.ndarray:
     return jnp.concatenate(flattened_params)
 
 
-def load_nets(n=3000):
+def load_nets(n=3000, data_dir='data/ctc_fixed', flatten=True, verbose=True):
     nets = []
-    with open('data/ctc_fixed/hyperparameters.json') as f:
+    hparam_file = os.path.join(data_dir, 'hyperparameters.json')
+    with open(hparam_file) as f:
         net_data = json.load(f)
     labels = {label: [] for label in net_data['0']}
-    for i, dir_info in enumerate(os.walk("data/ctc_fixed")):
+    for i, dir_info in enumerate(os.walk(data_dir)):
         if i == 0:
             continue
         dir_name, _, files = dir_info
@@ -89,20 +92,22 @@ def load_nets(n=3000):
             with open(dir_name + "/" + file_name, 'rb') as f:
                 net = jnp.load(f, allow_pickle=True).item()
                 if has_nans(net):
-                    print("Not loading params at:", dir_name, "since it contains nan values")
+                    if verbose:
+                        print("Not loading params at:", dir_name, "since it contains nan values")
                     continue
-                flattened = data_transform(net)
-                if jnp.abs(jnp.mean(flattened)) > 1:
-                    print("Not loading params at:", dir_name, "since its means is very large")
-                    continue
-                nets.append(flattened)
+                nets.append(net)
                 net_num = dir_name.split('/')[-1]
                 for hparam in net_data[net_num]:
                     labels[hparam].append(net_data[net_num][hparam])
         if len(nets) == n:
             break
     print("Loaded", len(nets), "network parameters")
-    data = jnp.array(nets)
+
+    if flatten:
+        data_nets = [data_transform(net) for net in nets]
+        data = jnp.array(data_nets)
+    else:
+        data = nets
 
     processed_labels = {}
 
