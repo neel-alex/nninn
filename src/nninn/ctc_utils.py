@@ -16,7 +16,7 @@ from haiku.initializers import Initializer, Constant, RandomNormal, TruncatedNor
 import datasets
 
 
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.3'
+os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.15'
 
 # Whether datasets should be lazily loaded or if they should be loaded all at once when the script executes
 lazy = False
@@ -44,17 +44,50 @@ dataset_dict = {
 }
 
 
+test_datasets = {
+    "MNIST": datasets.load_dataset("mnist", split="test").with_format("jax"),
+    "CIFAR-10": datasets.load_dataset("cifar10", split="test").with_format("jax").rename_column('img', 'image'),
+    "SVHN": datasets.load_dataset("svhn", "cropped_digits", split="test").with_format("jax"),
+    "Fashion-MNIST": datasets.load_dataset("fashion_mnist", split="test").with_format("jax"),  # TODO: add STL-10
+}
+
+
+@jit
+def expand_and_resize(images):
+    return image.resize(jnp.repeat(images[:, jnp.newaxis, ...], 3, 1),
+                        (images.shape[0], 3, 32, 32),
+                        image.ResizeMethod.LINEAR)
+
+
+def dataset_dependent_transform(images, dataset_name):
+    images = (images / 128) - 1
+    if dataset_name in {"MNIST", "Fashion-MNIST"}:
+        images = expand_and_resize(images)
+    elif dataset_name in {"CIFAR-10", "SVHN"}:
+        images = jnp.transpose(images, (0, 3, 1, 2))
+    else:
+        raise NotImplementedError
+    return images
+
+
 if not lazy:
     dd = {}
+    td = {}
     t = time.time()
     for k in dataset_dict:
         print(f"Loading {k}.")
         dd[k] = {
-            "image": dataset_dict[k]["image"],
+            "image": dataset_dependent_transform(dataset_dict[k]["image"], k),
             "label": dataset_dict[k]["label"]
+        }
+        print(f"Loading {k} test.")
+        td[k] = {
+            "image": dataset_dependent_transform(test_datasets[k]["image"], k),
+            "label": test_datasets[k]["label"]
         }
     print(f"Done loading datasets. Time elapsed: {time.time() - t}")
     dataset_dict = dd
+    test_datasets = td
 
 
 optimizer_dict = {
@@ -165,28 +198,10 @@ def generate_hyperparameters(key, fixed_net_arch=True):
 
 
 @jit
-def expand_and_resize(images):
-    return image.resize(jnp.repeat(images[:, jnp.newaxis, ...], 3, 1),
-                        (images.shape[0], 3, 32, 32),
-                        image.ResizeMethod.LINEAR)
-
-
-@jit
 def augment(key, images):
     sd_key, noise_key = random.split(key)
     noise_sd = random.uniform(sd_key, shape=(1,), minval=0.0, maxval=0.03)  # TODO: Other augmentations
     return images + noise_sd * random.normal(noise_key, shape=images.shape)  # I think this is the right way to use SD?
-
-
-def dataset_dependent_transform(images, dataset_name):
-    images = (images / 128) - 1
-    if dataset_name in {"MNIST", "Fashion-MNIST"}:
-        images = expand_and_resize(images)
-    elif dataset_name in {"CIFAR-10", "SVHN"}:
-        images = jnp.transpose(images, (0, 3, 1, 2))
-    else:
-        raise NotImplementedError
-    return images
 
 
 def train_network(key, hparams, arch, run_dir):
@@ -197,56 +212,69 @@ def train_network(key, hparams, arch, run_dir):
                                           activation=activation_dict[hparams['activation']],
                                           w_init=initializer_dict[hparams['initialization']],
                                           **arch))
-    is_training = True
 
     dataset_name = hparams['dataset']
     if lazy:
         print(f"Loading {dataset_name}.")
     images = dataset_dict[dataset_name]['image']
     labels = dataset_dict[dataset_name]['label']
+
+    test_images = test_datasets[dataset_name]['image']
+    test_labels = test_datasets[dataset_name]['label']
     batch_size = hparams['batch_size']
     key, subkey = random.split(key)
 
     dummy_image = images[jnp.newaxis, 0]
-    dummy_data = dataset_dependent_transform(dummy_image, dataset_name)
 
-    params, state = network.init(subkey, dummy_data, is_training)
+    params, state = network.init(subkey, dummy_image, is_training=True)
     opt_state = optimizer.init(params)
 
     num_epochs = 20  # TODO: implement early stopping?
     save_iter = 2
 
-    jnp.save(os.path.join(run_dir, 'epoch_0'), params)
-
     train_losses = []
     train_accs = []
+    test_losses = []
+    test_accs = []
+    save_params = {'epoch_0': params}
 
     for epoch in range(num_epochs):
         total_loss = jnp.array(0.)
         total_correct = jnp.array(0.)
         key, subkey = random.split(key)
         for batch_image, batch_label in shuffle_iterate(key, images, labels, batch_size):
-            batch_image = dataset_dependent_transform(batch_image, dataset_name)
             if hparams['augmentation']:
                 key, subkey = random.split(key)
                 batch_image = augment(key, batch_image)
 
             key, subkey = random.split(key)
             params, state, opt_state, loss, correct = update(params, state, subkey, opt_state, batch_image, batch_label,
-                                                             is_training, network, optimizer)
+                                                             network, optimizer)
             total_loss += loss
             total_correct += correct
 
         train_losses.append(total_loss.sum().item() / images.shape[0])
         train_accs.append(total_correct.sum().item() / images.shape[0])
+
+        key, subkey = random.split(key)
+        test_loss, test_acc = test(params, state, subkey, test_images, test_labels, network)
+
+        test_losses.append(test_loss.item() / test_images.shape[0])
+        test_accs.append(test_acc.item() / test_images.shape[0])
+
         print(f"{run_dir}\t"
               f"Epoch {epoch + 1}:\t"
-              f"Loss: {train_losses[-1]:3f}\t"
-              f"Acc: {train_accs[-1]:3f}")
+              f"Loss: {train_losses[-1]:.3f}\t"
+              f"Acc: {train_accs[-1]:.3f}\t"
+              f"Test loss: {test_losses[-1]:.3f}\t"
+              f"Test acc: {test_accs[-1]:.3f}\t")
 
-        # Todo: get test acc?
         if (epoch+1) % save_iter == 0:
-            jnp.save(os.path.join(run_dir, f'epoch_{epoch+1}'), params)
+            save_params[f'epoch_{epoch+1}'] = params
+
+    print(f"{run_dir}\t Run finished, saving checkpoints...")
+    for epoch_num in save_params:
+        jnp.save(os.path.join(run_dir, epoch_num), save_params[epoch_num])
 
     with open(os.path.join(run_dir, "run_data.json"), 'w') as f:
         run_data = {
@@ -255,13 +283,15 @@ def train_network(key, hparams, arch, run_dir):
             'run_data': {
                 'loss': train_losses,
                 'accuracy': train_accs,
+                'test_loss': test_losses,
+                'test_acc': test_accs
             },
         }
         json.dump(run_data, f)
 
 
-def loss_and_correct(params, state, key, batch, labels, is_training, network):
-    logits, state = network.apply(params, state, key, batch, is_training)
+def loss_and_correct(params, state, key, batch, labels, network):
+    logits, state = network.apply(params, state, key, batch, is_training=True)
     predictions = jnp.argmax(logits, axis=-1)
     correct = predictions == labels
     targets = nn.one_hot(labels, num_classes=10)
@@ -269,13 +299,24 @@ def loss_and_correct(params, state, key, batch, labels, is_training, network):
     return jnp.mean(loss), (jnp.sum(loss), jnp.sum(correct), state)
 
 
-@functools.partial(jit, static_argnums=(6, 7, 8))
-def update(params, state, key, opt_state, batch, labels, is_training, network, optimizer):
+@functools.partial(jit, static_argnames=('network', 'optimizer'))
+def update(params, state, key, opt_state, batch, labels, network, optimizer):
     (grads, (total_loss, correct, state)) = grad(loss_and_correct, has_aux=True)(params, state, key, batch,
-                                                                                 labels, is_training, network)
+                                                                                 labels, network)
     updates, opt_state = optimizer.update(grads, opt_state)
     params = apply_updates(params, updates)
     return params, state, opt_state, total_loss, correct
+
+
+@functools.partial(jit, static_argnames=('network',))
+def test(params, state, key, test_images, test_labels, network):
+    # TODO: Don't duplicate this code either.
+    logits, _ = network.apply(params, state, key, test_images, is_training=False)
+    predictions = jnp.argmax(logits, axis=1)
+    correct = predictions == test_labels
+    targets = nn.one_hot(test_labels, num_classes=10)
+    loss = softmax_cross_entropy(logits, targets)
+    return jnp.sum(loss), jnp.sum(correct)
 
 
 """
