@@ -91,15 +91,18 @@ def load_nets(n=3000):
                 if has_nans(net):
                     print("Not loading params at:", dir_name, "since it contains nan values")
                     continue
-                nets.append(net)
+                flattened = data_transform(net)
+                if jnp.abs(jnp.mean(flattened)) > 1:
+                    print("Not loading params at:", dir_name, "since its means is very large")
+                    continue
+                nets.append(flattened)
                 net_num = dir_name.split('/')[-1]
                 for hparam in net_data[net_num]:
                     labels[hparam].append(net_data[net_num][hparam])
         if len(nets) == n:
             break
     print("Loaded", len(nets), "network parameters")
-    data_nets = [data_transform(net) for net in nets]
-    data = jnp.array(data_nets)
+    data = jnp.array(nets)
 
     processed_labels = {}
 

@@ -1,6 +1,9 @@
-jax[cuda]
+# jax[cuda]
 # pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 optax
 dm-haiku
 matplotlib
-https://github.com/IDSIA/sacred/archive/refs/tags/0.8.3.tar.gz   # Required for Python 3.10 compatibility, if lower python version then any sacred works.
+# https://github.com/IDSIA/sacred/archive/refs/tags/0.8.3.tar.gz   # Required for Python 3.10 compatibility, if lower python version then any sacred works.
+datasets
+h5py  # Required to use SVHN
+Pillow
