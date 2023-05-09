@@ -5,6 +5,7 @@ import json
 import time
 
 
+import jax
 from jax import nn, random, image, jit, grad
 import jax.numpy as jnp
 
@@ -227,6 +228,7 @@ def train_network(key, hparams, arch, run_dir):
     dummy_image = images[jnp.newaxis, 0]
 
     params, state = network.init(subkey, dummy_image, is_training=True)
+    print(f"Param count: {sum(x.size for x in jax.tree_util.tree_leaves(params))}")
     opt_state = optimizer.init(params)
 
     num_epochs = 20  # TODO: implement early stopping?
@@ -272,7 +274,8 @@ def train_network(key, hparams, arch, run_dir):
         if (epoch+1) % save_iter == 0:
             save_params[f'epoch_{epoch+1}'] = params
 
-    print(f"{run_dir}\t Run finished, saving checkpoints...")
+    print(f"{run_dir}\t"
+          f"Run finished, saving checkpoints...")
     for epoch_num in save_params:
         jnp.save(os.path.join(run_dir, epoch_num), save_params[epoch_num])
 

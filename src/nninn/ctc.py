@@ -11,8 +11,11 @@ from nninn.ctc_utils import generate_hyperparameters, train_network
 
 os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.15'
 
+fixed_net_arch = False
+print(f"Using {'fixed' if fixed_net_arch else 'variable'} network architectures.")
+
 seed = 4
-data_dir = "data/ctc"
+data_dir = f"/rds/user/sma92/hpc-work/ctc{'_fixed' if fixed_net_arch else ''}"
 num_nets = 12
 num_workers = 4
 lock_file = "run.lock"
@@ -53,8 +56,8 @@ def initiate_training_run(key, run_number):
         Path(os.path.join(run_dir, lock_file)).touch()
 
     key, subkey = random.split(key)
-    hparams, arch = generate_hyperparameters(subkey)
-    print("Starting run number", run_number)
+    hparams, arch = generate_hyperparameters(subkey, fixed_net_arch=fixed_net_arch)
+    print(f"Starting run number {run_number} on {hparams['dataset']}")
     train_network(key, hparams, arch, run_dir)
 
     os.unlink(os.path.join(run_dir, lock_file))
