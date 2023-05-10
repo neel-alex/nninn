@@ -3,6 +3,7 @@ import json
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
+import jax
 from jax import random, nn
 import jax.numpy as jnp
 import numpy as np
@@ -14,6 +15,9 @@ key = random.PRNGKey(4)
 unmap_info = {
     "dataset": {
         "MNIST": 0,
+        "CIFAR-10": 1,
+        "SVHN": 2,
+        "Fashion-MNIST": 3,
     },
     "batch_size": {
         32: 0,
@@ -76,9 +80,71 @@ def data_transform(net: JAXParams) -> jnp.ndarray:
     return jnp.concatenate(flattened_params)
 
 
-def load_nets(n=3000, data_dir='data/ctc_fixed', flatten=True, verbose=True):
+# TODO replace with a net data dataclass
+def load_net(dir_name: str, skip_nan=True) -> JAXParams:
+    net = np.load(
+        os.path.join(dir_name, "epoch_20.npy"), allow_pickle=True).item()
+    return None if skip_nan and has_nans(net) else net
+
+
+def load_rundata(dir_name: str):
+    with open(os.path.join(dir_name, "run_data.json"), "r") as f:
+        data = json.load(f)
+    
+    hparams = data["hyperparameters"]
+    arch = data["architecture"]
+    rundata = data["run_data"]
+    return hparams, arch, rundata
+
+
+def get_labels_from_hparams(hparams: Dict[str, str]) -> Dict[str, int]:
+    labels = {}
+    for k, v in hparams.items():
+        labels[k] = v if k == "lr" else unmap_info[k][v]
+    return labels
+
+
+def tree_list(trees):
+    """Maps a list of trees to a tree of lists."""
+    return jax.tree_map(lambda *x: list(x), *trees)
+
+
+# TODO load iteratively instead of all at once
+def load_nets(n=3000, data_dir='data/ctc_fixed', flatten=False, verbose=True):
+    """Loads the first n networks from the given data_dir. Returns a list of
+    dicts containing the network parameters and a dict containing the labels.
+    
+    The flatten argument is a dummy argument for backwards compatibility."""
+    if flatten:
+        print("Warning: flatten argument is deprecated"
+              " and will be removed in the future.")
+
     nets = []
-    hparam_file = os.path.join(data_dir, 'hyperparameters.json')
+    labels = []
+    for i, dir_name in enumerate(os.listdir(data_dir)):
+        if i > n:
+            break
+
+        current_dir = os.path.join(data_dir, dir_name)
+        # load checkpoint
+        net = load_net(current_dir)
+        if net is None:
+            if verbose:
+                print("Not loading params at:", dir_name, "since it contains nan values")
+            continue
+        nets.append(net)
+
+        # load labels
+        hparams, arch, rundata = load_rundata(current_dir)
+        labels.append(get_labels_from_hparams(hparams))
+    return nets, tree_list(labels)
+
+
+def load_nets_for_old_config(
+        n=3000, data_dir='data/ctc_fixed', flatten=True, verbose=True):
+    """Deprecated. Use load_nets instead."""
+    nets = []
+    hparam_file = os.path.join(data_dir, 'run_data.json')
     with open(hparam_file) as f:
         net_data = json.load(f)
     labels = {label: [] for label in net_data['0']}
