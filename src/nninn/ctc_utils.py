@@ -17,7 +17,7 @@ from haiku.initializers import Initializer, Constant, RandomNormal, TruncatedNor
 import datasets
 
 
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.15'
+# os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.15'
 
 # Whether datasets should be lazily loaded or if they should be loaded all at once when the script executes
 lazy = False
@@ -55,8 +55,8 @@ test_datasets = {
 
 @jit
 def expand_and_resize(images):
-    return image.resize(jnp.repeat(images[:, jnp.newaxis, ...], 3, 1),
-                        (images.shape[0], 3, 32, 32),
+    return image.resize(jnp.repeat(images[..., jnp.newaxis], 3, 3),
+                        (images.shape[0], 32, 32, 3),
                         image.ResizeMethod.LINEAR)
 
 
@@ -65,7 +65,8 @@ def dataset_dependent_transform(images, dataset_name):
     if dataset_name in {"MNIST", "Fashion-MNIST"}:
         images = expand_and_resize(images)
     elif dataset_name in {"CIFAR-10", "SVHN"}:
-        images = jnp.transpose(images, (0, 3, 1, 2))
+        images = images  # jnp.transpose(images, (0, 3, 1, 2))
+        # I think channel is actually supposed to go last...
     else:
         raise NotImplementedError
     return images
@@ -144,21 +145,26 @@ class CTCNet(hk.Module):
         self.dropout_rate = dropout_rate
 
     def __call__(self, x: jnp.ndarray, is_training: bool) -> jnp.ndarray:
+        i = 0
         for _ in range(self.n_conv_layers):
             x = hk.Conv2D(output_channels=self.n_filters, kernel_shape=self.kernel_size,
-                          padding="SAME", w_init=self.w_init)(x)
-            x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(x, is_training)
+                          padding="SAME", w_init=self.w_init, name=f'Conv_{i}')(x)
+            i += 1
+            x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9, name=f'BatchNorm_{i}')(x, is_training)
+            i += 1
             x = self.activation(x)
 
         x = hk.Flatten()(x)
 
         for _ in range(self.n_fc_layers - 1):
-            x = hk.Linear(self.fc_width, w_init=self.w_init)(x)
-            x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(x, is_training)
+            x = hk.Linear(self.fc_width, w_init=self.w_init, name=f'Dense_{i}')(x)
+            i += 1
+            x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9, name=f'BatchNorm_{i}')(x, is_training)
+            i += 1
             x = self.activation(x)
             x = hk.dropout(hk.next_rng_key(), self.dropout_rate, x) if is_training else x
 
-        x = hk.Linear(self.n_classes, w_init=self.w_init)(x)
+        x = hk.Linear(self.n_classes, w_init=self.w_init, name=f'Dense_{i}')(x)
         return x
 
 
@@ -206,6 +212,7 @@ def augment(key, images):
 
 
 def train_network(key, hparams, arch, run_dir):
+    seed = key
     optimizer = optimizer_dict[hparams['optimizer']](hparams['lr'])
     network = hk.transform_with_state(
         lambda x, is_training: ctc_net_fn(x, is_training,
@@ -289,6 +296,7 @@ def train_network(key, hparams, arch, run_dir):
                 'test_loss': test_losses,
                 'test_acc': test_accs
             },
+            'seed': seed
         }
         json.dump(run_data, f)
 

@@ -9,15 +9,16 @@ from jax import random
 
 from nninn.ctc_utils import generate_hyperparameters, train_network
 
-os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.15'
+# os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.15'
 
 fixed_net_arch = False
 print(f"Using {'fixed' if fixed_net_arch else 'variable'} network architectures.")
 
 seed = 4
-data_dir = f"/rds/user/sma92/hpc-work/ctc{'_fixed' if fixed_net_arch else ''}"
+data_dir = f"/rds/project/rds-eWkDxBhxBrQ/neel/ctc{'_fixed' if fixed_net_arch else '_new'}"
+data_dir = f"data/ctc{'_fixed' if fixed_net_arch else ''}30"
 num_nets = 12
-num_workers = 4
+num_workers = 1
 lock_file = "run.lock"
 
 
@@ -36,16 +37,16 @@ def file_lock():
 
 
 def initiate_training_run(key, run_number):
-    with file_lock():
-        run_dir = os.path.join(data_dir, str(run_number))
+    run_dir = os.path.join(data_dir, str(run_number))
+    if Path(os.path.join(run_dir, 'run_data.json')).exists():
+        print(f"Skipping run number {run_number} as it has completed.")
+        return
 
+    with file_lock():
         if Path(run_dir).exists():
             # If experiment completed or in progress, skip completely:
             if Path(os.path.join(run_dir, lock_file)).exists():
                 print(f"Skipping run number {run_number} as it is in progress.")
-                return
-            elif Path(os.path.join(run_dir, 'run_data.json')).exists():
-                print(f"Skipping run number {run_number} as it has completed.")
                 return
             else:
                 # else, delete the aborted experiment and start over.
