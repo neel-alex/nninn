@@ -212,7 +212,6 @@ def augment(key, images):
 
 
 def train_network(key, hparams, arch, run_dir):
-    seed = key
     optimizer = optimizer_dict[hparams['optimizer']](hparams['lr'])
     network = hk.transform_with_state(
         lambda x, is_training: ctc_net_fn(x, is_training,
@@ -296,7 +295,6 @@ def train_network(key, hparams, arch, run_dir):
                 'test_loss': test_losses,
                 'test_acc': test_accs
             },
-            'seed': seed
         }
         json.dump(run_data, f)
 
