@@ -16,24 +16,24 @@ print(f"Using {'fixed' if fixed_net_arch else 'variable'} network architectures.
 
 seed = 4
 data_dir = f"/rds/project/rds-eWkDxBhxBrQ/neel/ctc{'_fixed' if fixed_net_arch else '_new'}"
-data_dir = f"data/ctc{'_fixed' if fixed_net_arch else ''}30"
+# data_dir = f"data/ctc{'_fixed' if fixed_net_arch else ''}30"
 num_nets = 12
 num_workers = 1
 lock_file = "run.lock"
-
+global_lock = os.path.join(data_dir, lock_file)
 
 @contextmanager
 def file_lock():
     while True:
         try:
-            with open(lock_file, "x"):
+            with open(global_lock, "x"):
                 break
         except FileExistsError:
             time.sleep(0.1)
     try:
         yield
     finally:
-        os.unlink(lock_file)
+        os.unlink(global_lock)
 
 
 def initiate_training_run(key, run_number):

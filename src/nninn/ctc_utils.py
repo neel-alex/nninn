@@ -239,13 +239,13 @@ def train_network(key, hparams, arch, run_dir):
     opt_state = optimizer.init(params)
 
     num_epochs = 20  # TODO: implement early stopping?
-    save_iter = 2
+    save_iter = 10
 
     train_losses = []
     train_accs = []
     test_losses = []
     test_accs = []
-    save_params = {'epoch_0': params}
+    save_params = {}  # {'epoch_0': params}
 
     for epoch in range(num_epochs):
         total_loss = jnp.array(0.)
