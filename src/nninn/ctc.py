@@ -11,12 +11,12 @@ from nninn.ctc_utils import generate_hyperparameters, train_network
 
 # os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = '0.15'
 
-fixed_net_arch = False
+fixed_net_arch = True
 print(f"Using {'fixed' if fixed_net_arch else 'variable'} network architectures.")
 
 seed = 4
-data_dir = f"/rds/project/rds-eWkDxBhxBrQ/neel/ctc{'_fixed' if fixed_net_arch else '_new'}"
-# data_dir = f"data/ctc{'_fixed' if fixed_net_arch else ''}30"
+# data_dir = f"/rds/project/rds-eWkDxBhxBrQ/neel/hyprep{'_fixed' if fixed_net_arch else '_new'}"
+data_dir = f"data/hyprep{'_fixed' if fixed_net_arch else ''}"
 num_nets = 12
 num_workers = 1
 lock_file = "run.lock"

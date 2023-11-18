@@ -12,7 +12,7 @@ import jax.numpy as jnp
 from optax import adam, rmsprop, sgd, softmax_cross_entropy, apply_updates
 
 import haiku as hk
-from haiku.initializers import Initializer, Constant, RandomNormal, TruncatedNormal, VarianceScaling
+from haiku.initializers import Initializer, Constant, RandomNormal, TruncatedNormal, VarianceScaling, Orthogonal
 
 import datasets
 
@@ -25,16 +25,21 @@ lazy = False
 
 def make_learning_rate(key):
     # TODO: decay by 0.96 every epoch
-    return random.uniform(key, minval=0.0002, maxval=0.005)
+    return jnp.exp(random.uniform(key, minval=jnp.log(5e-4), maxval=jnp.log(5e-2)))
+
+
+def make_dropout_rate(key):
+    return random.uniform(key, minval=0, maxval=0.7)
 
 
 hyperparameters = {
     "dataset": ["MNIST", "CIFAR-10", "SVHN", "Fashion-MNIST"],
-    "batch_size": [32, 64, 128, 256],
-    "augmentation": [True, False],
-    "optimizer": ["Adam", "RMSProp", "MomentumSGD"],
-    "activation": ["ReLU", "ELU", "Sigmoid", "Tanh"],
-    "initialization": ["Constant", "RandomNormal", "GlorotUniform", "GlorotNormal"]
+    "batch_size": [512],
+    "augmentation": [False],
+    "optimizer": ["Adam", "RMSProp", "SGD"],
+    "activation": ["ReLU", "Tanh"],
+    "initialization": ["XavierNormal", "HeNormal", "Orthogonal", "RandomNormal", "TruncatedNormal"],
+    "train_frac": [0.1, 0.25, 0.5, 1.0],
 }
 
 dataset_dict = {
@@ -62,13 +67,15 @@ def expand_and_resize(images):
 
 def dataset_dependent_transform(images, dataset_name):
     images = (images / 128) - 1
-    if dataset_name in {"MNIST", "Fashion-MNIST"}:
-        images = expand_and_resize(images)
-    elif dataset_name in {"CIFAR-10", "SVHN"}:
-        images = images  # jnp.transpose(images, (0, 3, 1, 2))
-        # I think channel is actually supposed to go last...
-    else:
-        raise NotImplementedError
+    if dataset_name in {"CIFAR-10", "SVHN"}:
+        images = jnp.mean(images, axis=-1)  # Greyscale the images -- channel mean.
+    # if dataset_name in {"MNIST", "Fashion-MNIST"}:
+    #     images = expand_and_resize(images)
+    # elif dataset_name in {"CIFAR-10", "SVHN"}:
+    #     images = images  # jnp.transpose(images, (0, 3, 1, 2))
+    #     # I think channel is actually supposed to go last...
+    # else:
+    #     raise NotImplementedError
     return images
 
 
@@ -95,21 +102,20 @@ if not lazy:
 optimizer_dict = {
     "Adam": adam,
     "RMSProp": rmsprop,
-    "MomentumSGD": functools.partial(sgd, momentum=0.9),
+    "SGD": sgd,
 }
 
 activation_dict = {
     "ReLU": nn.relu,
-    "ELU": nn.elu,
-    "Sigmoid": nn.sigmoid,
     "Tanh": nn.tanh,
 }
 
 initializer_dict = {
-    "Constant": Constant(0.1),
+    "XavierNormal": VarianceScaling(1.0, "fan_avg", "truncated_normal"),
+    "HeNormal": VarianceScaling(2.0, "fan_in", "truncated_normal"),
+    "Orthogonal": Orthogonal(),
     "RandomNormal": RandomNormal(),
-    "GlorotUniform": VarianceScaling(1.0, "fan_avg", "uniform"),
-    "GlorotNormal": VarianceScaling(1.0, "fan_avg", "truncated_normal"),
+    "TruncatedNormal": TruncatedNormal()
 }
 
 
@@ -122,16 +128,24 @@ net_arch = {
 }
 
 
+class GlobalAveragePoolingModule(hk.Module):
+    def __call__(self, x):
+        # Assuming x is a 4D tensor with dimensions (batch_size, height, width, channels)
+        # Perform global average pooling across spatial dimensions (height and width)
+        pooled = jnp.mean(x, axis=(1, 2))
+
+        return pooled
+
 class CTCNet(hk.Module):
     def __init__(self,
                  n_classes: int,
                  activation: Callable = nn.relu,
                  w_init: Initializer = TruncatedNormal(),
-                 kernel_size: Tuple[int, int] = (5, 5),
+                 kernel_size: Tuple[int, int] = (3, 3),
                  n_conv_layers: int = 3,
-                 n_filters: int = 32,
-                 n_fc_layers: int = 3,
-                 fc_width: int = 128,
+                 n_filters: int = 16,
+                 n_fc_layers: int = 1,
+                 fc_width: int = 10,
                  dropout_rate: float = 0.5):
         super().__init__()
         self.n_classes = n_classes
@@ -150,11 +164,12 @@ class CTCNet(hk.Module):
             x = hk.Conv2D(output_channels=self.n_filters, kernel_shape=self.kernel_size,
                           padding="SAME", w_init=self.w_init, name=f'Conv_{i}')(x)
             i += 1
-            x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9, name=f'BatchNorm_{i}')(x, is_training)
-            i += 1
+            # x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9, name=f'BatchNorm_{i}')(x, is_training)
+            # i += 1
             x = self.activation(x)
+            x = hk.dropout(hk.next_rng_key(), self.dropout_rate, x) if is_training else x
 
-        x = hk.Flatten()(x)
+        x = GlobalAveragePoolingModule()(x)
 
         for _ in range(self.n_fc_layers - 1):
             x = hk.Linear(self.fc_width, w_init=self.w_init, name=f'Dense_{i}')(x)
@@ -186,10 +201,11 @@ def shuffle_iterate(key, images, labels, batch_size):
 
 
 def generate_hyperparameters(key, fixed_net_arch=True):
-    keys = random.split(key, num=8)
-    hparams = {'lr': make_learning_rate(keys[0]).item()}
+    keys = random.split(key, num=9)
+    hparams = {'lr': make_learning_rate(keys[0]).item(),
+               'dropout_rate': make_dropout_rate(keys[0]).item()}
     for i, k in enumerate(hyperparameters):
-        index = random.randint(keys[i + 1], (1,), minval=0, maxval=len(hyperparameters[k])).item()
+        index = random.randint(keys[i + 2], (1,), minval=0, maxval=len(hyperparameters[k])).item()
         hparams[k] = hyperparameters[k][index]
 
     key = keys[-1]
@@ -218,6 +234,7 @@ def train_network(key, hparams, arch, run_dir):
                                           n_classes=10,
                                           activation=activation_dict[hparams['activation']],
                                           w_init=initializer_dict[hparams['initialization']],
+                                          dropout_rate=hparams['dropout_rate'],
                                           **arch))
 
     dataset_name = hparams['dataset']
@@ -226,10 +243,16 @@ def train_network(key, hparams, arch, run_dir):
     images = dataset_dict[dataset_name]['image']
     labels = dataset_dict[dataset_name]['label']
 
+    num_to_use = int(len(images) * hparams['train_frac'])
+    images = images[:num_to_use]
+    labels = labels[:num_to_use]
+
     test_images = test_datasets[dataset_name]['image']
     test_labels = test_datasets[dataset_name]['label']
     batch_size = hparams['batch_size']
     key, subkey = random.split(key)
+
+    images, test_images = images[..., jnp.newaxis], test_images[..., jnp.newaxis]
 
     dummy_image = images[jnp.newaxis, 0]
 
@@ -237,7 +260,7 @@ def train_network(key, hparams, arch, run_dir):
     print(f"Param count: {sum(x.size for x in jax.tree_util.tree_leaves(params))}")
     opt_state = optimizer.init(params)
 
-    num_epochs = 20  # TODO: implement early stopping?
+    num_epochs = 86  # TODO: implement early stopping?
     save_iter = 10
 
     train_losses = []
