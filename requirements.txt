@@ -7,3 +7,4 @@ matplotlib
 datasets
 h5py  # Required to use SVHN
 Pillow
+scikit-learn
